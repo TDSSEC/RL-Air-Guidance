@@ -83,6 +83,12 @@ let _settings = {
   inverseGravity: false,
   inputAssist: false,
 
+  // Coach overlays (all off by default)
+  coachGhost: false,
+  coachShadow: false,
+  coachVelocity: false,
+  coachStick: false,
+
   // Game Speed
   gameSpeed: 1.0 // 0.05 = 5%, 1.0 = 100%, 1.5 = 150%
 };
@@ -195,7 +201,8 @@ export function validateSetting(key, value) {
   // Boolean settings validation
   const booleanSettings = [
     'showArrow', 'showCircle', 'minimalUi', 'isDarkMode', 'airRollIsToggle',
-    'gpEnabled', 'gameSoundsEnabled', 'gameMusicEnabled', 'dualStickMode', 'inverseGravity', 'inputAssist'
+    'gpEnabled', 'gameSoundsEnabled', 'gameMusicEnabled', 'dualStickMode', 'inverseGravity', 'inputAssist',
+    'coachGhost', 'coachShadow', 'coachVelocity', 'coachStick'
   ];
 
   if (booleanSettings.includes(key)) {

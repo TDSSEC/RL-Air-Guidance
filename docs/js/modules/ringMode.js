@@ -10,6 +10,7 @@ import * as CONST from './constants.js';
 import * as Car from './car.js';
 import * as Audio from './audio.js';
 import { getSetting, saveSettings } from './settings.js';
+import * as Coach from './coach.js';
 
 // ============================================================================
 // MODULE DEPENDENCIES (injected via init())
@@ -132,6 +133,30 @@ export function getRingModeStarted() { return ringModeStarted; }
 export function getRingModePaused() { return ringModePaused; }
 export function getCurrentDifficulty() { return currentDifficulty; }
 export function getRings() { return rings; }
+
+/**
+ * Target ring for coaching: oldest unpassed ring still ahead of the car
+ * (same rule updateRingModeRendering uses). Returns null if none.
+ * arrival = game seconds until the ring reaches the car's plane (z = 0).
+ */
+export function getTargetRing() {
+  let best = null;
+  for (const r of rings) {
+    if (!r || !r.mesh || r.passed || r.missed || r.mesh.position.z >= 0) continue;
+    if (!best || r.spawnIndex < best.spawnIndex ||
+        (r.spawnIndex === best.spawnIndex && r.mesh.position.z > best.mesh.position.z)) best = r;
+  }
+  if (!best) return null;
+  const half = best.size / 2;
+  return {
+    id: best.spawnIndex,
+    x: best.mesh.position.x,
+    y: best.mesh.position.y,
+    innerR: half - CONST.RING_TUBE_RADIUS,
+    outerR: half + CONST.RING_TUBE_RADIUS,
+    arrival: best.speed > 0 ? -best.mesh.position.z / best.speed : Infinity
+  };
+}
 export function getCameraTarget() { return { x: cameraTargetX, y: cameraTargetY }; }
 export function getBoostFlames() { return boostFlames; }
 
@@ -594,6 +619,7 @@ export function resetRingModePhysicsOnly() {
 }
 
 export function resetRingMode() {
+  Coach.reset();
   ringModeScore = 0;
   ringModeLives = CONST.DIFFICULTY_SETTINGS[currentDifficulty].initialLives;
   ringModeRingCount = 0;
@@ -1828,6 +1854,29 @@ export function updateRingModePhysics(dt, inputState, carQuaternion) {
     ringModeStarted = false; // Wait for boost before falling
     ignoreBoostUntilRelease = true; // Ignore boost until player releases it
     ringModeLives--; // Lose a life
+  }
+  // Coach hook (all overlays off by default): feed the coach this step's state
+  if (getSetting('coachGhost') || getSetting('coachShadow') || getSetting('coachVelocity') || getSetting('coachStick')) {
+    let stick = null;
+    if (Input && Input.getJoyVec && Input.getJoyBaseR) {
+      const jv = Input.getJoyVec(), br = Input.getJoyBaseR();
+      if (br) stick = { x: jv.x / br, y: jv.y / br };
+    }
+    Coach.update(dt, {
+      pos: { x: ringModePosition.x, y: ringModePosition.y },
+      vel: { x: ringModeVelocity.x, y: ringModeVelocity.y },
+      quat: carQuaternion,
+      boostActive: effectiveBoostActive,
+      target: getTargetRing(),
+      easy: currentDifficulty === 'easy',
+      gravity: CONST.RING_GRAVITY * gravityDirection,
+      stick,
+      shaping: {
+        deadzone: Input && Input.getTouchDeadzone ? Input.getTouchDeadzone() : 0.09,
+        curve: getSetting('inputPow') || 1,
+        range: getSetting('stickRange') || 1
+      }
+    });
   }
   } catch (error) {
     console.error('[RingMode] Error in updateRingModePhysics:', error);

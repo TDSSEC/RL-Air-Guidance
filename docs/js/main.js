@@ -246,7 +246,14 @@ function renderHUD(){
     isMobile: Input.getIsMobile(),
     currentDifficulty: RingMode.getCurrentDifficulty(),
     minimalUi: settings.minimalUi,
-    inputAssist: settings.inputAssist,
+    // Coach stick panel replaces the compass while it is on
+    inputAssist: settings.inputAssist && !settings.coachStick,
+    coach: {
+      ghost: !!settings.coachGhost,
+      shadow: !!settings.coachShadow,
+      velocity: !!settings.coachVelocity,
+      stick: !!settings.coachStick
+    },
     // Camera for 3D projection
     camera: sceneManager.getCamera()
   });
@@ -700,6 +707,24 @@ export function init() {
       saveSettings();
     });
   }
+
+  // Coach overlay toggles (all off by default)
+  [['coachGhost', 'coachGhostToggle', 'coachGhostStatus'],
+   ['coachShadow', 'coachShadowToggle', 'coachShadowStatus'],
+   ['coachVelocity', 'coachVelocityToggle', 'coachVelocityStatus'],
+   ['coachStick', 'coachStickToggle', 'coachStickStatus']].forEach(([key, btnId, tagId]) => {
+    const btn = document.getElementById(btnId);
+    const tag = document.getElementById(tagId);
+    if (!btn || !tag) return;
+    btn.classList.toggle('active', !!settings[key]);
+    tag.textContent = settings[key] ? 'On' : 'Off';
+    btn.addEventListener('click', () => {
+      settings[key] = !settings[key];
+      btn.classList.toggle('active', settings[key]);
+      tag.textContent = settings[key] ? 'On' : 'Off';
+      saveSettings();
+    });
+  });
 
   // NOTE: Ring Mode settings consolidated into Ring Mode menu only
   // Main menu Ring Mode card has been removed - all settings now in ringModePanel

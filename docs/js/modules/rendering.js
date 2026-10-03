@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import * as Car from './car.js';
 import * as RingMode from './ringMode.js';
+import * as Coach from './coach.js';
 
 // HUD canvas context
 let hud, hctx;
@@ -762,5 +763,21 @@ export function renderHUD(state) {
       inputAssist: state.inputAssist,
       camera: state.camera
     });
+
+    // Coach overlays (each toggle off by default)
+    if (state.coach && state.camera) {
+      const cam = state.camera;
+      const v = new THREE.Vector3();
+      Coach.draw(hctx, {
+        flags: state.coach,
+        width: innerWidth,
+        height: innerHeight,
+        active: !state.ringModePaused && state.ringModeLives > 0,
+        project: (x, y, z = 0) => {
+          v.set(x, y, z).project(cam);
+          return { x: (v.x * 0.5 + 0.5) * innerWidth, y: (-v.y * 0.5 + 0.5) * innerHeight, behind: v.z > 1 };
+        }
+      });
+    }
   }
 }
