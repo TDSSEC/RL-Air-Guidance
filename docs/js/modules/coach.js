@@ -22,7 +22,7 @@ export const MAX_SPEED = CONST.RING_MAX_SPEED;
 export const GRID_BOUNDS = CONST.RING_GRID_BOUNDS;
 
 const SIM_DT = 1 / 120;       // prediction step
-const MIN_T = 0.12;           // below this, 1/t² blows up - clamp the horizon
+const MIN_T = 0.4;            // planning horizon floor: 2*err/t^2 explodes as t -> 0, and no thumb can chase that
 const BOOST_AVG_TAU = 0.4;    // seconds, smoothing for the "actual boost duty" readout
 
 // Stick PD (nose-angle error -> stick). The game is rate controlled: stick
@@ -149,8 +149,9 @@ export function noseError(targetDir, quat) {
 
 /**
  * Convert "I want the nose to point along targetDir" into a stick position.
- * Uses the same car-frame convention as the existing Input Assist compass
- * (stick angle 0 = driver's "up"), then sets stick magnitude with a PD law
+ * Convention measured against the real game (tests/coach-sim.mjs, and
+ * tests/follow-live in the browser): stick (sx, sy), y down, swings the nose
+ * toward sx*right + sy*up in the car frame. Then sets stick magnitude with a PD law
  * on the nose-angle error and inverts the game's deadzone/curve shaping.
  *
  * @param {{x:number,y:number}} targetDir - desired nose direction in the XY plane
@@ -168,21 +169,25 @@ export function stickForNose(targetDir, quat, errRate = 0, opts = {}) {
 
   const fwd = noseOf(quat);
   const up = rotate(quat, { x: 0, y: 1, z: 0 });
-  const right = { x: -fwd.y * up.z + fwd.z * up.y, y: -fwd.z * up.x + fwd.x * up.z, z: -fwd.x * up.y + fwd.y * up.x }; // fwd x up
+  // right = fwd x up (world direction the stick's right pushes the nose toward)
+  const right = { x: fwd.y * up.z - fwd.z * up.y, y: fwd.z * up.x - fwd.x * up.z, z: fwd.x * up.y - fwd.y * up.x };
 
   const tl = Math.hypot(targetDir.x, targetDir.y);
   const to = tl > 1e-9 ? { x: targetDir.x / tl, y: targetDir.y / tl, z: 0 } : { x: 0, y: 1, z: 0 };
   const fc = Math.max(-1, Math.min(1, dot(to, fwd)));
   const err = Math.acos(fc);
 
-  const plank = { x: to.x - fwd.x * fc, y: to.y - fwd.y * fc, z: to.z - fwd.z * fc };
-  const plen = Math.hypot(plank.x, plank.y, plank.z);
+  // Direction (perpendicular to the nose) the nose must swing toward.
+  let plank = { x: to.x - fwd.x * fc, y: to.y - fwd.y * fc, z: to.z - fwd.z * fc };
+  let plen = Math.hypot(plank.x, plank.y, plank.z);
+  if (err < PD_DEADBAND) return { x: 0, y: 0, mag: 0, err };
+  if (plen < 1e-6) { plank = up; plen = 1; }   // target dead behind the nose: any swing works
 
-  if (err < PD_DEADBAND || plen < 1e-6) return { x: 0, y: 0, mag: 0, err };
-
-  let stickAngle = Math.atan2(dot(plank, right) / plen, -dot(plank, up) / plen);
-  if (fc < 0) stickAngle += Math.PI;
-  const screenAngle = stickAngle - Math.PI / 2;
+  // Measured in the real game: stick (sx, sy) [y down] swings the nose toward
+  // sx * right + sy * up (car frame). So the stick is the plank's coordinates.
+  const sx = dot(plank, right) / plen;
+  const sy = dot(plank, up) / plen;
+  const screenAngle = Math.atan2(sy, sx);
 
   // Commanded angular speed fraction (rate control: stick * wMax = rad/s)
   let eff = (PD_KP * err + PD_KD * errRate) / wMax;
@@ -470,73 +475,80 @@ function drawVelocity(ctx, view) {
   ctx.fill();
 }
 
+/**
+ * Stick guide on the circle around the car (screen centre, same ring the old
+ * compass used). Green dot = where the stick should point, white dot = where it
+ * is now; dot size shows how far to push. A boost gauge sits beside the circle.
+ */
 function drawStickPanel(ctx, view) {
   const { targetStick, stick, ideal, boostActual } = snap;
-  const R = 52;
-  const cx = view.width / 2 - 70;
-  const cy = view.height - R - 28;
+  const cx = view.width / 2, cy = view.height / 2, R = 170;
 
-  // Backing
-  ctx.fillStyle = 'rgba(10,12,18,0.55)';
-  roundRect(ctx, cx - R - 14, cy - R - 14, R * 2 + 14 + 150, R * 2 + 28, 12);
-  ctx.fill();
-
-  // Stick well
-  ctx.strokeStyle = 'rgba(255,255,255,0.45)';
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.arc(cx, cy, R, 0, Math.PI * 2);
   ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy);
-  ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R);
-  ctx.globalAlpha = 0.25;
-  ctx.stroke();
-  ctx.globalAlpha = 1;
 
-  const tx = cx + targetStick.x * R, ty = cy + targetStick.y * R;
-  const lx = cx + stick.x * R, ly = cy + stick.y * R;
+  const onRing = (v, base) => {
+    const m = Math.hypot(v.x, v.y);
+    if (m < 0.02) return null;
+    const a = Math.atan2(v.y, v.x);
+    return { x: cx + Math.cos(a) * R, y: cy + Math.sin(a) * R, r: base * (0.6 + 0.8 * Math.min(1, m)), a };
+  };
+  const t = onRing(targetStick, 10);
+  const l = onRing(stick, 7);
 
-  // Error line
-  ctx.strokeStyle = 'rgba(255,90,90,0.9)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(lx, ly);
-  ctx.lineTo(tx, ty);
-  ctx.stroke();
+  // Error: short arc along the circle between live and target directions
+  if (t && l) {
+    let d = t.a - l.a;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    ctx.strokeStyle = 'rgba(255,90,90,0.9)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, l.a, l.a + d, d < 0);
+    ctx.stroke();
+  }
+  if (l) {
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(l.x, l.y, l.r, 0, Math.PI * 2); ctx.fill();
+  }
+  if (t) {
+    ctx.fillStyle = 'rgb(80,255,140)';
+    ctx.strokeStyle = '#0f1116';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  } else {
+    ctx.fillStyle = 'rgba(80,255,140,0.9)';
+    ctx.font = 'bold 14px system-ui';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('stick centred', cx, cy - R - 14);
+  }
 
-  // Live stick (white) and target (green)
-  ctx.fillStyle = '#fff';
-  ctx.beginPath(); ctx.arc(lx, ly, 6, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = 'rgb(80,255,140)';
-  ctx.strokeStyle = '#0f1116';
-  ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.arc(tx, ty, 8, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-
-  // Boost bar: fill = actual duty, tick = target duty
-  const bx = cx + R + 28, by = cy - R, bw = 22, bh = R * 2;
+  // Boost gauge: fill = actual duty, tick = target duty
+  const bx = cx + R + 22, bh = 120, by = cy - bh / 2, bw = 16;
   ctx.strokeStyle = 'rgba(255,255,255,0.6)';
   ctx.lineWidth = 2;
   ctx.strokeRect(bx, by, bw, bh);
   ctx.fillStyle = 'rgba(255,170,60,0.85)';
   ctx.fillRect(bx, by + bh * (1 - boostActual), bw, bh * boostActual);
-  const ty2 = by + bh * (1 - ideal.duty);
+  const ty = by + bh * (1 - ideal.duty);
   ctx.strokeStyle = 'rgb(80,255,140)';
   ctx.lineWidth = 4;
   ctx.beginPath();
-  ctx.moveTo(bx - 6, ty2); ctx.lineTo(bx + bw + 6, ty2);
+  ctx.moveTo(bx - 6, ty); ctx.lineTo(bx + bw + 6, ty);
   ctx.stroke();
-
   ctx.fillStyle = '#fff';
   ctx.font = '12px system-ui';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
-  ctx.fillText('BOOST', bx + bw + 12, by);
-  ctx.fillText(`want ${Math.round(ideal.duty * 100)}%`, bx + bw + 12, by + 16);
-  ctx.fillText(`have ${Math.round(boostActual * 100)}%`, bx + bw + 12, by + 32);
+  ctx.fillText('BOOST', bx - 4, by - 18);
+  ctx.fillText(`want ${Math.round(ideal.duty * 100)}%`, bx + bw + 10, by + 4);
+  ctx.fillText(`have ${Math.round(boostActual * 100)}%`, bx + bw + 10, by + 20);
   if (!ideal.reachable) {
     ctx.fillStyle = 'rgb(255,120,120)';
-    ctx.fillText('too far!', bx + bw + 12, by + 52);
+    ctx.fillText('too far!', bx + bw + 10, by + 40);
   }
 }
 

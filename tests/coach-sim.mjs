@@ -1,6 +1,6 @@
 // Headless logic check for the coach: random start states, closed-loop sim
 // driven only by idealInput()'s recommendations. Run: node tests/coach-sim.mjs
-import { idealInput, predictLanding, BOOST_ACCEL, GRAVITY } from '../docs/js/modules/coach.js';
+import { idealInput, predictLanding, stickForNose, BOOST_ACCEL, GRAVITY } from '../docs/js/modules/coach.js';
 import * as CONST from '../docs/js/modules/constants.js';
 
 let seed = 12345;
@@ -57,6 +57,29 @@ function trial(opts) {
 }
 
 let failed = false;
+
+// Stick convention regression. Measured in the real game from the Ring Mode
+// start pose (Euler XYZ 1.5pi, 0, pi; nose = world +Y): stick right swings the
+// nose toward world +x, stick left toward -x. (A sign slip here once made the
+// coach point the opposite way while the sim above still passed.)
+{
+  const qm = (a, b) => ({ x: a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y, y: a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
+                          z: a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w, w: a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z });
+  const ax = (x, y, z, ang) => ({ x: x*Math.sin(ang/2), y: y*Math.sin(ang/2), z: z*Math.sin(ang/2), w: Math.cos(ang/2) });
+  const q = qm(qm(ax(1,0,0,Math.PI*1.5), ax(0,1,0,0)), ax(0,0,1,Math.PI));
+  const checks = [
+    ['target +x -> stick right', stickForNose({x:1,y:0}, q), s => s.x > 0.5 && Math.abs(s.y) < 0.2],
+    ['target -x -> stick left',  stickForNose({x:-1,y:0}, q), s => s.x < -0.5 && Math.abs(s.y) < 0.2],
+    ['target dead behind nose -> still commands a swing', stickForNose({x:0,y:-1}, q), s => s.mag > 0.5],
+    ['target on nose -> stick centred', stickForNose({x:0,y:1}, q), s => s.mag === 0]
+  ];
+  for (const [name, r, ok] of checks) {
+    const pass = ok(r);
+    if (!pass) failed = true;
+    console.log(`stick convention: ${name.padEnd(52)} ${pass ? 'PASS' : 'FAIL'}`);
+  }
+}
+
 for (const easy of [true, false]) {
   for (const noseMode of ['instant', 'lagged', 'control']) {
     let reach = 0, hitReach = 0, all = 0;
