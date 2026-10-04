@@ -1,6 +1,6 @@
 // Headless logic check for the coach: random start states, closed-loop sim
 // driven only by idealInput()'s recommendations. Run: node tests/coach-sim.mjs
-import { idealInput, predictLanding, stickForNose, stableStick, resetStable, BOOST_ACCEL, GRAVITY } from '../docs/js/modules/coach.js';
+import { idealInput, predictLanding, stickForNose, stableStick, resetStable, rollAngle, levelLocks, BOOST_ACCEL, GRAVITY } from '../docs/js/modules/coach.js';
 import * as CONST from '../docs/js/modules/constants.js';
 
 let seed = 12345;
@@ -104,6 +104,39 @@ let failed = false;
     const pass = ok(r);
     if (!pass) failed = true;
     console.log(`stick convention: ${name.padEnd(52)} ${pass ? 'PASS' : 'FAIL'}`);
+  }
+}
+
+// ---- Roof gauge: roll measured around the nose, positive = Air Roll Right ----
+{
+  // Quaternion helpers ({x,y,z,w})
+  const mul = (a, b) => ({
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w
+  });
+  const axis = (x, y, z, a) => ({ x: x * Math.sin(a / 2), y: y * Math.sin(a / 2), z: z * Math.sin(a / 2), w: Math.cos(a / 2) });
+  // Ring Mode start pose: Euler(1.5pi, 0, pi) XYZ = Rx(1.5pi) * Rz(pi)
+  const start = mul(axis(1, 0, 0, 1.5 * Math.PI), axis(0, 0, 1, Math.PI));
+  // Body-frame spin about the nose (local +Z) like physics.js integrates (q * w)
+  const spin = (q, wz, t) => { let r = q; const n = 200; for (let i = 0; i < n; i++) r = mul(r, axis(0, 0, 1, wz * t / n)); return r; };
+  // Steering (yaw about local +Y) must not change the roof
+  const yawed = mul(start, axis(0, 1, 0, 1.1));
+  const deg = r => r === null ? null : Math.round(r * 180 / Math.PI);
+  const checks = [
+    ['start pose: roof faces camera -> 0 deg', deg(rollAngle(start)), v => v === 0],
+    ['yaw (steering) keeps roof level', deg(rollAngle(yawed)), v => Math.abs(v) <= 1],
+    ['Air Roll Right (+wz) 0.5 s -> positive roll', deg(rollAngle(spin(start, 1, 0.5))), v => v > 25 && v < 32],
+    ['Air Roll Left (-wz) 0.5 s -> negative roll', deg(rollAngle(spin(start, -1, 0.5))), v => v < -25 && v > -32],
+    ['nose pointed at the camera -> undefined', rollAngle(mul(start, axis(1, 0, 0, -Math.PI / 2))), v => v === null],
+    ['level locks: 1-2 pitch+roll, 3 roll, 4-5 none', JSON.stringify([1, 2, 3, 4, 5].map(levelLocks)),
+      v => v === JSON.stringify([{ pitch: true, roll: true }, { pitch: true, roll: true }, { pitch: false, roll: true }, { pitch: false, roll: false }, { pitch: false, roll: false }])]
+  ];
+  for (const [name, v, ok] of checks) {
+    const pass = ok(v);
+    if (!pass) failed = true;
+    console.log(`roof gauge: ${name.padEnd(52)} ${pass ? 'PASS' : 'FAIL (' + v + ')'}`);
   }
 }
 

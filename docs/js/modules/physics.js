@@ -9,6 +9,7 @@ import * as CONST from './constants.js';
 import * as Car from './car.js';
 import * as Input from './input.js';
 import * as Settings from './settings.js';
+import * as Coach from './coach.js';
 
 // Debug logging flag - set to true for development
 const DEBUG = false;
@@ -930,10 +931,10 @@ export function updatePhysics(dt, settings, chromeShown) {
   // Coach levels 1-2 lock pitch and roll so the stick works like a steering
   // wheel: left/right always turns the nose anticlockwise/clockwise on screen.
   const coachLevel = Settings.getSetting('coachLevel') || 0;
-  const coachLock = gameState.getRingModeActive() && (coachLevel === 1 || coachLevel === 2);
-  if (pitchLocked || coachLock) w.x = 0;
+  const coachLock = gameState.getRingModeActive() ? Coach.levelLocks(coachLevel) : { pitch: false, roll: false };
+  if (pitchLocked || coachLock.pitch) w.x = 0;
   if (yawLocked) w.y = 0;
-  if (rollLocked || coachLock) w.z = 0;
+  if (rollLocked || coachLock.roll) w.z = 0;
 
   // --- 7. Damping + release brake ---
   // CRITICAL: Damping behavior depends on mode!

@@ -717,8 +717,9 @@ export function init() {
     0: { diff: null, hint: 'Coaching off - original game.' },
     1: { diff: 'easy', hint: 'Steer: sideways only, no gravity. The stick only turns the nose: LEFT = anticlockwise, RIGHT = clockwise. Turn the white needle onto the green notch, press boost when the light is on.' },
     2: { diff: 'normal', hint: 'Hover: gravity on. Same steering-wheel stick. Feather boost by following the light to stay up and drift to the ring.' },
-    3: { diff: 'normal', hint: 'Full control: pitch and roll unlocked. The text tells you which way to push the stick; keep the car flat to the camera to keep it simple.' },
-    4: { diff: 'normal', hint: 'Fade: guidance only appears when you are off course. Next step: Off.' }
+    3: { diff: 'normal', hint: 'Pitch: up/down on the stick now tilts the nose toward or away from the camera, so keep your thumb on the left-right line. Roll is still locked. The ROOF gauge shows when diagonal pushes twist the car.' },
+    4: { diff: 'normal', hint: 'Roll: everything unlocked. Keep the ROOF needle in the green - when it leaves, the coach tells you which air roll to hold (Q / E on keyboard) to bring the roof back to the camera. With the roof level the stick works like Levels 1-2.' },
+    5: { diff: 'normal', hint: 'Fade: guidance only appears when you are off course or the roof has rolled. Next step: Off.' }
   };
   if (coachLevelSel) {
     const showLevel = () => {
@@ -739,6 +740,16 @@ export function init() {
       showLevel();
       saveSettings();
       if (RingMode.getRingModeActive()) RingMode.resetRingMode();
+    });
+  }
+
+  // Ring Mode map: ice rings course (default) or the classic flat grid
+  const ringMapSel = document.getElementById('ringMapMenu');
+  if (ringMapSel) {
+    ringMapSel.value = settings.ringMap === 'classic' ? 'classic' : 'ice';
+    ringMapSel.addEventListener('change', () => {
+      settings.ringMap = ringMapSel.value === 'classic' ? 'classic' : 'ice';
+      saveSettings();
     });
   }
 

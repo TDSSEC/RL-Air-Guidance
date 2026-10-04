@@ -270,15 +270,49 @@ let boostAvg = 0;         // smoothed actual boost duty
 let prevErr = null;
 let aimAngle = null;      // target nose angle shown to the player (frozen while coasting)
 let pulsePhase = 0;       // boost light PWM phase
+let rollCue = 0;          // -1 = roll back with Air Roll Left, +1 = Air Roll Right, 0 = roof fine
 
 // Coach levels (Settings -> Game -> Coach level). Each adds difficulty and removes help.
+// lock: which rotation axes physics.js holds at zero ('both' = pitch + roll, 'roll' = roll only).
+// roof: show the roof gauge; rollCue: tell the player to air roll the roof back.
 export const LEVELS = {
   0: { name: 'Off' },
-  1: { name: 'Steer', difficulty: 'easy', lock: true, cues: 'always' },
-  2: { name: 'Hover', difficulty: 'normal', lock: true, cues: 'always' },
-  3: { name: 'Full control', difficulty: 'normal', lock: false, cues: 'always' },
-  4: { name: 'Fade', difficulty: 'normal', lock: false, cues: 'when-off' }
+  1: { name: 'Steer', difficulty: 'easy', lock: 'both', cues: 'always' },
+  2: { name: 'Hover', difficulty: 'normal', lock: 'both', cues: 'always' },
+  3: { name: 'Pitch', difficulty: 'normal', lock: 'roll', cues: 'always', roof: true },
+  4: { name: 'Roll', difficulty: 'normal', lock: null, cues: 'always', roof: true, rollCue: true },
+  5: { name: 'Fade', difficulty: 'normal', lock: null, cues: 'when-off', roof: true, rollCue: true }
 };
+
+/** Axes a coach level locks: { pitch, roll } (used by physics.js). */
+export function levelLocks(level) {
+  const l = LEVELS[level];
+  const lock = l && l.lock;
+  return { pitch: lock === 'both', roll: lock === 'both' || lock === 'roll' };
+}
+
+// Roof gauge: the roof facing the camera is "level". Past ROLL_WARN the stick
+// directions are rotated enough to confuse; the cue stays until ROLL_OK.
+const ROLL_WARN = 30 * Math.PI / 180;
+const ROLL_OK = 12 * Math.PI / 180;
+
+/**
+ * How far the car has rolled away from "roof facing the camera", measured
+ * around the nose. Positive = rotated the way Air Roll Right turns it, so
+ * Air Roll Left brings a positive roll back. null when the nose points almost
+ * straight at/away from the camera (roll is undefined there).
+ */
+export function rollAngle(quat) {
+  const n = noseOf(quat);
+  const u = rotate(quat, { x: 0, y: 1, z: 0 });
+  // Camera direction (+Z) with the nose component removed = where the roof should face
+  const zx = -n.z * n.x, zy = -n.z * n.y, zz = 1 - n.z * n.z;
+  const zl = Math.hypot(zx, zy, zz);
+  if (zl < 0.35) return null;
+  const ref = { x: zx / zl, y: zy / zl, z: zz / zl };
+  const c = { x: ref.y * u.z - ref.z * u.y, y: ref.z * u.x - ref.x * u.z, z: ref.x * u.y - ref.y * u.x };
+  return Math.atan2(dot(n, c), dot(ref, u));
+}
 const PULSE_PERIOD = 0.6;   // s (game time) - slow enough to follow by hand
 const COAST_DUTY = 0.08;    // below this: let go of boost
 
@@ -347,11 +381,18 @@ export function update(dt, s) {
   let turn = aimAngle - noseAngle;
   turn = Math.atan2(Math.sin(turn), Math.cos(turn));   // + = anticlockwise on screen
 
+  // Roof gauge + roll-back cue (hysteresis so it doesn't blink at the edge)
+  const roll = rollAngle(s.quat);
+  if (roll === null) rollCue = 0;
+  else if (Math.abs(roll) > ROLL_WARN) rollCue = roll > 0 ? -1 : 1;   // -1 = Air Roll Left
+  else if (Math.abs(roll) < ROLL_OK) rollCue = 0;
+  else if (rollCue !== 0) rollCue = roll > 0 ? -1 : 1;                // overshot: point back the other way
+
   snap = {
     pos: s.pos, vel: s.vel, nose, target: s.target, t,
     coast, full, now, ideal, targetStick, stick: live,
     stickErr, boostErr, boostActual: boostAvg, inSpread,
-    coasting, aimAngle, noseAngle, noseInPlane, turn, boostLight,
+    coasting, aimAngle, noseAngle, noseInPlane, turn, boostLight, roll, rollCue,
     boostActive: !!s.boostActive, path: s.path || []
   };
 }
@@ -370,7 +411,7 @@ export function getSnapshot() { return snap; }
 export function resetStable() { stab = { vec: { x: 0, y: 0 }, shown: undefined, cand: undefined, candSince: 0, last: 0, amount: '' }; }
 
 export function reset() {
-  snap = null; prevErr = null; aimAngle = null; pulsePhase = 0; boostAvg = 0;
+  snap = null; prevErr = null; aimAngle = null; pulsePhase = 0; boostAvg = 0; rollCue = 0;
   stab = { vec: { x: 0, y: 0 }, shown: undefined, cand: undefined, candSince: 0, last: 0, amount: '' };
   resetStats();
 }
@@ -604,7 +645,8 @@ function drawLevel(ctx, view) {
 
   drawPath(ctx, view);
 
-  const offCourse = Math.abs(turn) > 0.45 || (boostLight !== boostActive && !coasting && Math.abs(ideal.duty - snap.boostActual) > 0.35);
+  const offCourse = Math.abs(turn) > 0.45 || (boostLight !== boostActive && !coasting && Math.abs(ideal.duty - snap.boostActual) > 0.35) ||
+    (lv.rollCue && snap.rollCue !== 0);
   if (lv.cues === 'when-off' && !offCourse) return;
 
   const c = px(view, snap.pos.x, snap.pos.y);
@@ -663,9 +705,10 @@ function drawLevel(ctx, view) {
   ctx.setLineDash([]);
 
   // One instruction line, stabilised so it doesn't flicker (see stableStick)
-  const st = stableStick(targetStick, lv.lock);
+  const st = stableStick(targetStick, lv.lock === 'both');
   let text;
   if (faint) text = 'Nose is pointing at/away from the camera - turn it back flat';
+  else if (lv.rollCue && snap.rollCue !== 0) text = 'Roll back: hold ' + (snap.rollCue < 0 ? '\u25C0 AIR ROLL LEFT (Q)' : 'AIR ROLL RIGHT (E) \u25B6');
   else text = st.sector === null ? 'Stick: centre  \u2713' : 'Stick: ' + SECTOR_WORDS[st.sector] + (st.amount ? ' ' + st.amount : '');
   lastInstruction = text;
   ctx.font = 'bold 22px system-ui';
@@ -680,7 +723,7 @@ function drawLevel(ctx, view) {
   // Level 3+: a small stick dial whose arrow turns smoothly. When the car
   // rolls, the right stick direction rotates with it - this shows that as a
   // steady rotation you can follow with your thumb, not a burst of words.
-  if (!lv.lock && !faint) {
+  if (lv.lock !== 'both' && !faint) {
     const w = ctx.measureText(text).width;
     const dx = c.x - w / 2 - 36, dy = c.y + R + 38, dr = 22;
     ctx.strokeStyle = 'rgba(255,255,255,0.6)';
@@ -696,6 +739,8 @@ function drawLevel(ctx, view) {
       ctx.beginPath(); ctx.arc(ex, ey, 4, 0, Math.PI * 2); ctx.fill();
     }
   }
+
+  if (lv.roof) drawRoof(ctx, c.x - R - 72, c.y, lv);
 
   // Boost light
   const bx = c.x + R + 40, by = c.y - 18;
@@ -714,6 +759,54 @@ function drawLevel(ctx, view) {
     ctx.font = 'bold 13px system-ui';
     ctx.fillText('too far - get close as you can', bx + 48, by + 52);
   }
+}
+
+/**
+ * Roof gauge: top = roof facing the camera (the stick works like Levels 1-2).
+ * The needle leans the way the car has rolled; Air Roll Left swings it left
+ * (anticlockwise), Air Roll Right swings it right. Green zone = fine.
+ */
+function drawRoof(ctx, x, y, lv) {
+  const r = 30, roll = snap.roll;
+  const top = -Math.PI / 2;
+  const warn = lv.rollCue && snap.rollCue !== 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+  // green "level" zone
+  ctx.strokeStyle = 'rgba(80,255,140,0.9)';
+  ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.arc(x, y, r - 3, top - ROLL_WARN, top + ROLL_WARN); ctx.stroke();
+
+  if (roll !== null) {
+    const a = top + roll;
+    const ok = Math.abs(roll) <= ROLL_WARN;
+    ctx.strokeStyle = ok ? '#fff' : 'rgb(255,190,70)';
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(a) * (r + 6), y + Math.sin(a) * (r + 6)); ctx.stroke();
+    // a little roof bar across the needle tip
+    const bx = x + Math.cos(a) * (r + 6), by = y + Math.sin(a) * (r + 6);
+    ctx.beginPath();
+    ctx.moveTo(bx - Math.sin(a) * 9, by + Math.cos(a) * 9);
+    ctx.lineTo(bx + Math.sin(a) * 9, by - Math.cos(a) * 9);
+    ctx.stroke();
+    if (warn) {   // arrow along the rim showing which way to roll back
+      const d = snap.rollCue;   // -1 left (anticlockwise), +1 right
+      const from = a, to = a + d * Math.min(Math.abs(roll), 1.2);
+      ctx.strokeStyle = 'rgba(255,215,64,0.95)';
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(x, y, r + 12, from, to, d < 0); ctx.stroke();
+    }
+  }
+  ctx.fillStyle = warn ? 'rgb(255,215,64)' : 'rgba(255,255,255,0.85)';
+  ctx.font = 'bold 12px system-ui';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText('ROOF', x, y - r - 14);
+  ctx.textBaseline = 'top';
+  ctx.fillText(roll === null ? '--' : Math.round(Math.abs(roll) * 180 / Math.PI) + '\u00B0', x, y + r + 8);
 }
 
 // Screen-space stick sectors (x right, y down), 45 degrees each

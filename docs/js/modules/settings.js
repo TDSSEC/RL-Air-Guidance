@@ -83,8 +83,11 @@ let _settings = {
   inverseGravity: false,
   inputAssist: false,
 
-  // Coach level: 0 off, 1-4 guided path (see coach.js LEVELS)
+  // Coach level: 0 off, 1-5 guided path (see coach.js LEVELS)
   coachLevel: 0,
+
+  // Ring Mode environment: 'ice' (rings map) or 'classic' (flat grid)
+  ringMap: 'ice',
 
   // Coach overlays (all off by default)
   coachGhost: false,
@@ -227,7 +230,11 @@ export function validateSetting(key, value) {
   }
 
   if (key === 'coachLevel') {
-    return Number.isInteger(value) && value >= 0 && value <= 4;
+    return Number.isInteger(value) && value >= 0 && value <= 5;
+  }
+
+  if (key === 'ringMap') {
+    return typeof value === 'string' && ['ice', 'classic'].includes(value);
   }
 
   if (key === 'ringDifficulty') {

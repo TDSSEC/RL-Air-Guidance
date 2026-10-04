@@ -12,6 +12,7 @@ import * as Audio from './audio.js';
 import { getSetting, saveSettings } from './settings.js';
 import * as Coach from './coach.js';
 import * as Arena from './arena.js';
+import * as IceMap from './map.js';
 
 // ============================================================================
 // MODULE DEPENDENCIES (injected via init())
@@ -905,7 +906,7 @@ function disposeRing(ring) {
 
   // Don't dispose geometry/materials - they're cached and reused!
   // Only dispose if not using cache (fallback case)
-  if (ring.mesh.geometry !== ringGeometryCache) {
+  if (ring.mesh.geometry !== ringGeometryCache && !IceMap.ownsGeometry(ring.mesh.geometry)) {
     ring.mesh.geometry.dispose();
   }
 
@@ -1922,6 +1923,7 @@ export function updateRingModeRendering(dt) {
 
       lastRingModeActive = false;
       Arena.hide();
+      IceMap.hide(rings);
       return;
     }
 
@@ -2287,6 +2289,14 @@ export function updateRingModeRendering(dt) {
     shadows: !!getSetting('arenaShadows'),
     rings,
     car: { x: ringModePosition.x, y: ringModePosition.y }
+  });
+  IceMap.update(scene, {
+    active: ringModeActive && getSetting('ringMap') !== 'classic',
+    rings,
+    moving: !ringModePaused && ringModeStarted && ringModeLives > 0,
+    dt,
+    hide: [boundaryGrid],
+    camera: { x: camera.position.x, y: camera.position.y }
   });
   } catch (error) {
     console.error('[RingMode] Error in updateRingModeRendering:', error);
