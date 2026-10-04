@@ -476,9 +476,10 @@ function drawVelocity(ctx, view) {
 }
 
 /**
- * Stick guide on the circle around the car (screen centre, same ring the old
- * compass used). Green dot = where the stick should point, white dot = where it
- * is now; dot size shows how far to push. A boost gauge sits beside the circle.
+ * Stick guide on the circle around the car. The circle is the stick's full
+ * throw: the green dot is exactly where the stick should be (near the centre
+ * = a small push), the white dot is where it is now. Put white on green.
+ * A boost gauge sits beside the circle.
  */
 function drawStickPanel(ctx, view) {
   const { targetStick, stick, ideal, boostActual } = snap;
@@ -489,41 +490,40 @@ function drawStickPanel(ctx, view) {
   ctx.beginPath();
   ctx.arc(cx, cy, R, 0, Math.PI * 2);
   ctx.stroke();
+  // Faint half-throw ring + centre cross so small pushes are readable
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, R / 2, 0, Math.PI * 2);
+  ctx.moveTo(cx - 8, cy); ctx.lineTo(cx + 8, cy);
+  ctx.moveTo(cx, cy - 8); ctx.lineTo(cx, cy + 8);
+  ctx.stroke();
 
-  const onRing = (v, base) => {
-    const m = Math.hypot(v.x, v.y);
-    if (m < 0.02) return null;
-    const a = Math.atan2(v.y, v.x);
-    return { x: cx + Math.cos(a) * R, y: cy + Math.sin(a) * R, r: base * (0.6 + 0.8 * Math.min(1, m)), a };
-  };
-  const t = onRing(targetStick, 10);
-  const l = onRing(stick, 7);
+  const clampDisc = v => { const m = Math.hypot(v.x, v.y); return m > 1 ? { x: v.x / m, y: v.y / m } : v; };
+  const tv = clampDisc(targetStick), lv = clampDisc(stick);
+  const tx = cx + tv.x * R, ty = cy + tv.y * R;
+  const lx = cx + lv.x * R, ly = cy + lv.y * R;
 
-  // Error: short arc along the circle between live and target directions
-  if (t && l) {
-    let d = t.a - l.a;
-    d = Math.atan2(Math.sin(d), Math.cos(d));
-    ctx.strokeStyle = 'rgba(255,90,90,0.9)';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(cx, cy, R, l.a, l.a + d, d < 0);
-    ctx.stroke();
-  }
-  if (l) {
-    ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(l.x, l.y, l.r, 0, Math.PI * 2); ctx.fill();
-  }
-  if (t) {
-    ctx.fillStyle = 'rgb(80,255,140)';
-    ctx.strokeStyle = '#0f1116';
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  } else {
+  // Error line from where the stick is to where it should be
+  ctx.strokeStyle = 'rgba(255,90,90,0.9)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(lx, ly);
+  ctx.lineTo(tx, ty);
+  ctx.stroke();
+
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(lx, ly, 7, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgb(80,255,140)';
+  ctx.strokeStyle = '#0f1116';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(tx, ty, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+  if (targetStick.mag === 0) {
     ctx.fillStyle = 'rgba(80,255,140,0.9)';
     ctx.font = 'bold 14px system-ui';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('stick centred', cx, cy - R - 14);
+    ctx.fillText('nose on target - stick centred', cx, cy - R - 14);
   }
 
   // Boost gauge: fill = actual duty, tick = target duty
@@ -533,11 +533,11 @@ function drawStickPanel(ctx, view) {
   ctx.strokeRect(bx, by, bw, bh);
   ctx.fillStyle = 'rgba(255,170,60,0.85)';
   ctx.fillRect(bx, by + bh * (1 - boostActual), bw, bh * boostActual);
-  const ty = by + bh * (1 - ideal.duty);
+  const dutyY = by + bh * (1 - ideal.duty);
   ctx.strokeStyle = 'rgb(80,255,140)';
   ctx.lineWidth = 4;
   ctx.beginPath();
-  ctx.moveTo(bx - 6, ty); ctx.lineTo(bx + bw + 6, ty);
+  ctx.moveTo(bx - 6, dutyY); ctx.lineTo(bx + bw + 6, dutyY);
   ctx.stroke();
   ctx.fillStyle = '#fff';
   ctx.font = '12px system-ui';
