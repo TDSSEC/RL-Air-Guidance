@@ -1,6 +1,6 @@
 // Headless logic check for the coach: random start states, closed-loop sim
 // driven only by idealInput()'s recommendations. Run: node tests/coach-sim.mjs
-import { idealInput, predictLanding, stickForNose, BOOST_ACCEL, GRAVITY } from '../docs/js/modules/coach.js';
+import { idealInput, predictLanding, stickForNose, stableStick, resetStable, BOOST_ACCEL, GRAVITY } from '../docs/js/modules/coach.js';
 import * as CONST from '../docs/js/modules/constants.js';
 
 let seed = 12345;
@@ -57,6 +57,33 @@ function trial(opts) {
 }
 
 let failed = false;
+
+// Instruction stabiliser (Level 3 flicker). 60 fps for 10 s.
+{
+  const raw8 = st => st.mag === 0 ? 'C' : String(((Math.round(Math.atan2(st.y, st.x) / (Math.PI / 4)) % 8) + 8) % 8);
+  const run = gen => {
+    resetStable();
+    let rawLast, rawN = 0, shownLast, shownN = 0;
+    for (let i = 0; i < 600; i++) {
+      const st = gen(i / 60);
+      const r = raw8(st); if (r !== rawLast) { rawN++; rawLast = r; }
+      const o = stableStick(st, false, i * 1000 / 60);
+      const w = o.sector === null ? 'C' : String(o.sector); if (w !== shownLast) { shownN++; shownLast = w; }
+    }
+    return { raw: rawN / 10, shown: shownN / 10 };
+  };
+  // Near target: tiny error (~3-6 deg) in a random direction every frame
+  const near = run(() => { const a = rnd() * 2 * Math.PI; return { x: 0.15 * Math.cos(a), y: 0.15 * Math.sin(a), mag: 0.15, err: 0.05 + 0.05 * rnd() }; });
+  // Wobbling just above the centre zone: error 9-14 deg, direction random each frame
+  const wobble = run(() => { const a = rnd() * 2 * Math.PI; return { x: 0.3 * Math.cos(a), y: 0.3 * Math.sin(a), mag: 0.3, err: 0.16 + 0.08 * rnd() }; });
+  // Car rolling at 1 turn per 2 s: needed stick rotates steadily (a real change)
+  const spin = run(t => { const a = Math.PI * t; return { x: 0.8 * Math.cos(a), y: 0.8 * Math.sin(a), mag: 0.8, err: 0.6 }; });
+  const okNear = near.shown <= 0.5, okWob = wobble.shown <= 0.5, okSpin = spin.shown >= 3 && spin.shown <= 5;
+  if (!okNear || !okWob || !okSpin) failed = true;
+  console.log(`stabiliser: near-target noise  raw ${near.raw.toFixed(1)}/s -> shown ${near.shown.toFixed(1)}/s (want <= 0.5)  ${okNear ? 'PASS' : 'FAIL'}`);
+  console.log(`stabiliser: noisy wobble      raw ${wobble.raw.toFixed(1)}/s -> shown ${wobble.shown.toFixed(1)}/s (want <= 0.5)  ${okWob ? 'PASS' : 'FAIL'}`);
+  console.log(`stabiliser: steady roll 0.5 rev/s raw ${spin.raw.toFixed(1)}/s -> shown ${spin.shown.toFixed(1)}/s (want 3-5: follows, no extra flicker)  ${okSpin ? 'PASS' : 'FAIL'}`);
+}
 
 // Stick convention regression. Measured in the real game from the Ring Mode
 // start pose (Euler XYZ 1.5pi, 0, pi; nose = world +Y): stick right swings the

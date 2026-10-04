@@ -366,7 +366,14 @@ function distToSegment(p, a, b) {
 
 export function getSnapshot() { return snap; }
 
-export function reset() { snap = null; prevErr = null; aimAngle = null; pulsePhase = 0; boostAvg = 0; resetStats(); }
+/** Reset only the instruction stabiliser (tests / level change). */
+export function resetStable() { stab = { vec: { x: 0, y: 0 }, shown: undefined, cand: undefined, candSince: 0, last: 0, amount: '' }; }
+
+export function reset() {
+  snap = null; prevErr = null; aimAngle = null; pulsePhase = 0; boostAvg = 0;
+  stab = { vec: { x: 0, y: 0 }, shown: undefined, cand: undefined, candSince: 0, last: 0, amount: '' };
+  resetStats();
+}
 
 // ============================================================================
 // OVERLAYS
@@ -655,11 +662,12 @@ function drawLevel(ctx, view) {
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // One instruction line
+  // One instruction line, stabilised so it doesn't flicker (see stableStick)
+  const st = stableStick(targetStick, lv.lock);
   let text;
   if (faint) text = 'Nose is pointing at/away from the camera - turn it back flat';
-  else if (targetStick.mag === 0 || Math.abs(turn) < 0.1) text = 'Stick: centre  \u2713';
-  else text = 'Stick: ' + stickWords(targetStick, lv.lock);
+  else text = st.sector === null ? 'Stick: centre  \u2713' : 'Stick: ' + SECTOR_WORDS[st.sector] + (st.amount ? ' ' + st.amount : '');
+  lastInstruction = text;
   ctx.font = 'bold 22px system-ui';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
@@ -668,6 +676,26 @@ function drawLevel(ctx, view) {
   ctx.strokeText(text, c.x, c.y + R + 26);
   ctx.fillStyle = '#fff';
   ctx.fillText(text, c.x, c.y + R + 26);
+
+  // Level 3+: a small stick dial whose arrow turns smoothly. When the car
+  // rolls, the right stick direction rotates with it - this shows that as a
+  // steady rotation you can follow with your thumb, not a burst of words.
+  if (!lv.lock && !faint) {
+    const w = ctx.measureText(text).width;
+    const dx = c.x - w / 2 - 36, dy = c.y + R + 38, dr = 22;
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(dx, dy, dr, 0, Math.PI * 2); ctx.stroke();
+    const m = Math.min(1, Math.hypot(st.vec.x, st.vec.y));
+    if (m > 0.05) {
+      const ex = dx + st.vec.x / m * dr * Math.max(0.35, m), ey = dy + st.vec.y / m * dr * Math.max(0.35, m);
+      ctx.strokeStyle = 'rgb(255,215,64)';
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(dx, dy); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.fillStyle = 'rgb(255,215,64)';
+      ctx.beginPath(); ctx.arc(ex, ey, 4, 0, Math.PI * 2); ctx.fill();
+    }
+  }
 
   // Boost light
   const bx = c.x + R + 40, by = c.y - 18;
@@ -688,16 +716,64 @@ function drawLevel(ctx, view) {
   }
 }
 
-/** "RIGHT a little", "UP-LEFT hard", ... from a target stick vector. */
-function stickWords(st, horizontalOnly) {
-  const ax = Math.abs(st.x), ay = Math.abs(st.y);
-  let dir;
-  if (horizontalOnly || ax > ay * 2) dir = st.x > 0 ? 'RIGHT \u25B6' : '\u25C0 LEFT';
-  else if (ay > ax * 2) dir = st.y > 0 ? 'DOWN \u25BC' : 'UP \u25B2';
-  else dir = (st.y > 0 ? 'DOWN' : 'UP') + '-' + (st.x > 0 ? 'RIGHT' : 'LEFT');
-  const m = st.mag;
-  const amount = m < 0.4 ? 'a little' : m < 0.75 ? '' : 'hard';
-  return (dir + ' ' + amount).trim();
+// Screen-space stick sectors (x right, y down), 45 degrees each
+const SECTOR_WORDS = ['RIGHT \u25B6', 'DOWN-RIGHT', 'DOWN \u25BC', 'DOWN-LEFT', '\u25C0 LEFT', 'UP-LEFT', 'UP \u25B2', 'UP-RIGHT'];
+const CENTRE_ERR = 0.14;    // rad (~8 deg): close enough - say "centre". Below this the
+                            // error's direction is noise and flips every frame.
+const HOLD_MS = 150;        // the answer must differ from what's shown this long before it switches
+const SMOOTH_S = 0.15;      // smoothing of the stick vector feeding the dial / sectors
+const SECTOR_SLACK = 0.12;  // rad of hysteresis before leaving the shown sector
+
+let lastInstruction = '';
+/** The instruction line currently shown (for tests). */
+export function getLastInstruction() { return lastInstruction; }
+
+let stab = { vec: { x: 0, y: 0 }, shown: undefined, cand: undefined, candSince: 0, last: 0, amount: '' };
+
+/**
+ * Turn the per-frame target stick into an instruction a person can read:
+ * smooth the vector, snap to 8 directions with hysteresis, treat small nose
+ * errors as "centre", and only switch once the new answer has held HOLD_MS.
+ * Returns { sector: 0-7 | null (centre), amount, vec (smoothed) }.
+ * `now` (ms) is injectable for tests.
+ */
+export function stableStick(tsk, horizontalOnly, now = performance.now()) {
+  const dt = stab.last ? Math.min(0.1, (now - stab.last) / 1000) : 0;
+  stab.last = now;
+  const k = dt > 0 ? 1 - Math.exp(-dt / SMOOTH_S) : 1;
+  stab.vec.x += (tsk.x - stab.vec.x) * k;
+  stab.vec.y += (tsk.y - stab.vec.y) * k;
+
+  let raw = null;
+  // Centre when the nose is close, or when the smoothed push averages out
+  // to almost nothing (direction would be noise)
+  if (tsk.mag > 0 && tsk.err >= CENTRE_ERR && Math.hypot(stab.vec.x, stab.vec.y) >= 0.12) {
+    const a = Math.atan2(stab.vec.y, stab.vec.x);
+    if (horizontalOnly) raw = stab.vec.x >= 0 ? 0 : 4;
+    else {
+      raw = ((Math.round(a / (Math.PI / 4)) % 8) + 8) % 8;
+      if (typeof stab.shown === 'number' && !horizontalOnly) {
+        const centre = stab.shown * Math.PI / 4;
+        let d = a - centre;
+        d = Math.atan2(Math.sin(d), Math.cos(d));
+        if (Math.abs(d) < Math.PI / 8 + SECTOR_SLACK) raw = stab.shown;
+      }
+    }
+  }
+
+  // Switch once the answer has differed from what's shown for HOLD_MS (even if
+  // it moved on meanwhile - a steady roll must still come through).
+  if (stab.shown === undefined) stab.shown = raw;
+  else if (raw !== stab.shown) {
+    if (stab.cand === undefined) { stab.cand = true; stab.candSince = now; }
+    else if (now - stab.candSince >= HOLD_MS) { stab.shown = raw; stab.cand = undefined; }
+  } else stab.cand = undefined;
+
+  const m = Math.hypot(stab.vec.x, stab.vec.y);
+  const want = m < 0.4 ? 'a little' : m < 0.75 ? '' : 'hard';
+  if (want !== stab.amount && (Math.abs(m - 0.4) > 0.06 && Math.abs(m - 0.75) > 0.06)) stab.amount = want;
+
+  return { sector: stab.shown, amount: stab.shown === null ? '' : stab.amount, vec: stab.vec };
 }
 
 /** Numbered dotted path from the car through the next rings. */
