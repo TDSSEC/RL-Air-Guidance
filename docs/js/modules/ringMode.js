@@ -1857,7 +1857,7 @@ export function updateRingModePhysics(dt, inputState, carQuaternion) {
     ringModeLives--; // Lose a life
   }
   // Coach hook (all overlays off by default): feed the coach this step's state
-  if (getSetting('coachGhost') || getSetting('coachShadow') || getSetting('coachVelocity') || getSetting('coachStick')) {
+  if ((getSetting('coachLevel') || 0) > 0 || getSetting('coachGhost') || getSetting('coachShadow') || getSetting('coachVelocity') || getSetting('coachStick')) {
     let stick = null;
     if (Input && Input.getJoyVec && Input.getJoyBaseR) {
       const jv = Input.getJoyVec(), br = Input.getJoyBaseR();
@@ -1872,6 +1872,10 @@ export function updateRingModePhysics(dt, inputState, carQuaternion) {
       easy: currentDifficulty === 'easy',
       gravity: CONST.RING_GRAVITY * gravityDirection,
       stick,
+      path: rings
+        .filter(r => r && r.mesh && !r.passed && !r.missed && r.mesh.position.z < 0)
+        .sort((a, b) => a.spawnIndex - b.spawnIndex)
+        .map(r => ({ x: r.mesh.position.x, y: r.mesh.position.y, z: r.mesh.position.z })),
       shaping: {
         deadzone: Input && Input.getTouchDeadzone ? Input.getTouchDeadzone() : 0.09,
         curve: getSetting('inputPow') || 1,
@@ -2270,6 +2274,11 @@ export function updateRingModeRendering(dt) {
 
   // Update the 3D dashed circle landing indicator on the grid
   updateLandingIndicator();
+  // Coach levels replace the dashed landing circle with their own simple guide
+  if ((getSetting('coachLevel') || 0) > 0) {
+    if (landingIndicator) landingIndicator.visible = false;
+    if (targetPointSphere) targetPointSphere.visible = false;
+  }
 
   // 3D depth cues (corridor, ring shadows) - both off by default
   Arena.update(scene, {

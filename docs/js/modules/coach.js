@@ -268,6 +268,19 @@ export function getSessionStats() {
 let snap = null;          // latest computed coaching data, null when inactive
 let boostAvg = 0;         // smoothed actual boost duty
 let prevErr = null;
+let aimAngle = null;      // target nose angle shown to the player (frozen while coasting)
+let pulsePhase = 0;       // boost light PWM phase
+
+// Coach levels (Settings -> Game -> Coach level). Each adds difficulty and removes help.
+export const LEVELS = {
+  0: { name: 'Off' },
+  1: { name: 'Steer', difficulty: 'easy', lock: true, cues: 'always' },
+  2: { name: 'Hover', difficulty: 'normal', lock: true, cues: 'always' },
+  3: { name: 'Full control', difficulty: 'normal', lock: false, cues: 'always' },
+  4: { name: 'Fade', difficulty: 'normal', lock: false, cues: 'when-off' }
+};
+const PULSE_PERIOD = 0.6;   // s (game time) - slow enough to follow by hand
+const COAST_DUTY = 0.08;    // below this: let go of boost
 
 /**
  * Called every physics step from ringMode.updateRingModePhysics().
@@ -283,6 +296,7 @@ let prevErr = null;
  * @param {number} s.gravity - signed gravity accel (0 handled via easy)
  * @param {{x:number,y:number}|null} s.stick - live stick, unit-disc screen coords
  * @param {{wMax?:number,deadzone?:number,curve?:number,range?:number}} [s.shaping]
+ * @param {Array<{x:number,y:number,z:number}>} [s.path] - upcoming ring centres, arrival order
  */
 export function update(dt, s) {
   boostAvg += ((s.boostActive ? 1 : 0) - boostAvg) * (1 - Math.exp(-dt / BOOST_AVG_TAU));
@@ -322,10 +336,23 @@ export function update(dt, s) {
   // Can the ring still be made? Ring centre within innerR of the coast->full segment.
   const inSpread = distToSegment(s.target, coast, full) <= s.target.innerR;
 
+  // Simple-mode cues: where the nose points / should point on screen, and a
+  // boost light that blinks at the wanted duty (slow PWM a thumb can follow).
+  const coasting = ideal.duty < COAST_DUTY;
+  if (!coasting || aimAngle === null) aimAngle = ideal.noseAngle;
+  pulsePhase = (pulsePhase + dt / PULSE_PERIOD) % 1;
+  const boostLight = ideal.duty > 1 - COAST_DUTY ? true : coasting ? false : pulsePhase < ideal.duty;
+  const noseAngle = Math.atan2(nose.y, nose.x);
+  const noseInPlane = Math.hypot(nose.x, nose.y);
+  let turn = aimAngle - noseAngle;
+  turn = Math.atan2(Math.sin(turn), Math.cos(turn));   // + = anticlockwise on screen
+
   snap = {
     pos: s.pos, vel: s.vel, nose, target: s.target, t,
     coast, full, now, ideal, targetStick, stick: live,
-    stickErr, boostErr, boostActual: boostAvg, inSpread
+    stickErr, boostErr, boostActual: boostAvg, inSpread,
+    coasting, aimAngle, noseAngle, noseInPlane, turn, boostLight,
+    boostActive: !!s.boostActive, path: s.path || []
   };
 }
 
@@ -339,7 +366,7 @@ function distToSegment(p, a, b) {
 
 export function getSnapshot() { return snap; }
 
-export function reset() { snap = null; prevErr = null; boostAvg = 0; resetStats(); }
+export function reset() { snap = null; prevErr = null; aimAngle = null; pulsePhase = 0; boostAvg = 0; resetStats(); }
 
 // ============================================================================
 // OVERLAYS
@@ -358,9 +385,11 @@ const CAR_WID = CONST.CAR_HEIGHT * CONST.CAR_SCALE;
  * @param {number} view.width
  * @param {number} view.height
  * @param {boolean} view.active - ring mode running (not paused / game over)
+ * @param {number} [view.level] - coach level; > 0 replaces the overlays with the simple guide
  */
 export function draw(ctx, view) {
   if (!ctx || !view || !view.active || !snap) return;
+  if (view.level > 0) { ctx.save(); drawLevel(ctx, view); ctx.restore(); return; }
   const f = view.flags;
   if (!f.ghost && !f.shadow && !f.velocity && !f.stick) return;
 
@@ -549,6 +578,157 @@ function drawStickPanel(ctx, view) {
   if (!ideal.reachable) {
     ctx.fillStyle = 'rgb(255,120,120)';
     ctx.fillText('too far!', bx + bw + 10, by + 40);
+  }
+}
+
+// ============================================================================
+// SIMPLE GUIDE (coach levels 1-4)
+// ============================================================================
+
+/**
+ * One needle (where your nose points = where boost pushes you), one green
+ * notch (where it should point), one curved arrow between them, one line of
+ * text telling you which way to push the stick, a boost light, and a numbered
+ * path through the next rings. Nothing else.
+ */
+function drawLevel(ctx, view) {
+  const lv = LEVELS[view.level] || LEVELS[1];
+  const { turn, ideal, boostLight, boostActive, coasting, targetStick } = snap;
+
+  drawPath(ctx, view);
+
+  const offCourse = Math.abs(turn) > 0.45 || (boostLight !== boostActive && !coasting && Math.abs(ideal.duty - snap.boostActual) > 0.35);
+  if (lv.cues === 'when-off' && !offCourse) return;
+
+  const c = px(view, snap.pos.x, snap.pos.y);
+  const R = 150;
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(c.x, c.y, R, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Screen angles: world y is up, canvas y is down
+  const scr = a => -a;
+  const nA = scr(snap.noseAngle), tA = scr(snap.aimAngle);
+
+  // Turn arrow along the circle, nose -> target
+  if (Math.abs(turn) > 0.1) {
+    const end = nA - turn; // canvas angle direction is flipped
+    ctx.strokeStyle = 'rgba(255,215,64,0.95)';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, R, nA, end, turn > 0);
+    ctx.stroke();
+    // arrowhead at the target end, pointing along the turn
+    const dir = turn > 0 ? -1 : 1;
+    const hx = c.x + Math.cos(end) * R, hy = c.y + Math.sin(end) * R;
+    const tx = -Math.sin(end) * dir, ty = Math.cos(end) * dir;   // tangent
+    const nx = Math.cos(end), ny = Math.sin(end);                // normal
+    ctx.fillStyle = 'rgba(255,215,64,0.95)';
+    ctx.beginPath();
+    ctx.moveTo(hx + tx * 14, hy + ty * 14);
+    ctx.lineTo(hx - tx * 4 + nx * 10, hy - ty * 4 + ny * 10);
+    ctx.lineTo(hx - tx * 4 - nx * 10, hy - ty * 4 - ny * 10);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Target notch (green wedge on the circle)
+  ctx.fillStyle = coasting ? 'rgba(80,255,140,0.45)' : 'rgb(80,255,140)';
+  ctx.beginPath();
+  ctx.moveTo(c.x + Math.cos(tA) * (R - 16), c.y + Math.sin(tA) * (R - 16));
+  ctx.lineTo(c.x + Math.cos(tA + 0.09) * (R + 18), c.y + Math.sin(tA + 0.09) * (R + 18));
+  ctx.lineTo(c.x + Math.cos(tA - 0.09) * (R + 18), c.y + Math.sin(tA - 0.09) * (R + 18));
+  ctx.closePath();
+  ctx.fill();
+
+  // Nose needle (white): where boost will push you
+  const faint = snap.noseInPlane < 0.35;
+  ctx.strokeStyle = faint ? 'rgba(255,255,255,0.4)' : '#fff';
+  ctx.lineWidth = 4;
+  if (faint) ctx.setLineDash([8, 6]);
+  ctx.beginPath();
+  ctx.moveTo(c.x + Math.cos(nA) * 40, c.y + Math.sin(nA) * 40);
+  ctx.lineTo(c.x + Math.cos(nA) * (R + 10), c.y + Math.sin(nA) * (R + 10));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // One instruction line
+  let text;
+  if (faint) text = 'Nose is pointing at/away from the camera - turn it back flat';
+  else if (targetStick.mag === 0 || Math.abs(turn) < 0.1) text = 'Stick: centre  \u2713';
+  else text = 'Stick: ' + stickWords(targetStick, lv.lock);
+  ctx.font = 'bold 22px system-ui';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+  ctx.strokeText(text, c.x, c.y + R + 26);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(text, c.x, c.y + R + 26);
+
+  // Boost light
+  const bx = c.x + R + 40, by = c.y - 18;
+  ctx.fillStyle = boostLight ? 'rgb(255,170,60)' : 'rgba(255,255,255,0.08)';
+  ctx.strokeStyle = boostLight ? 'rgb(255,200,120)' : 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 2;
+  roundRect(ctx, bx, by, 96, 36, 18);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = boostLight ? '#111' : 'rgba(255,255,255,0.8)';
+  ctx.font = 'bold 15px system-ui';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(boostLight ? 'BOOST' : 'let go', bx + 48, by + 18);
+  if (!ideal.reachable) {
+    ctx.fillStyle = 'rgb(255,120,120)';
+    ctx.font = 'bold 13px system-ui';
+    ctx.fillText('too far - get close as you can', bx + 48, by + 52);
+  }
+}
+
+/** "RIGHT a little", "UP-LEFT hard", ... from a target stick vector. */
+function stickWords(st, horizontalOnly) {
+  const ax = Math.abs(st.x), ay = Math.abs(st.y);
+  let dir;
+  if (horizontalOnly || ax > ay * 2) dir = st.x > 0 ? 'RIGHT \u25B6' : '\u25C0 LEFT';
+  else if (ay > ax * 2) dir = st.y > 0 ? 'DOWN \u25BC' : 'UP \u25B2';
+  else dir = (st.y > 0 ? 'DOWN' : 'UP') + '-' + (st.x > 0 ? 'RIGHT' : 'LEFT');
+  const m = st.mag;
+  const amount = m < 0.4 ? 'a little' : m < 0.75 ? '' : 'hard';
+  return (dir + ' ' + amount).trim();
+}
+
+/** Numbered dotted path from the car through the next rings. */
+function drawPath(ctx, view) {
+  const pts = [px(view, snap.pos.x, snap.pos.y)];
+  for (const r of snap.path.slice(0, 4)) {
+    const p = view.project(r.x, r.y, r.z);
+    if (p.behind) break;
+    pts.push(p);
+  }
+  if (pts.length < 2) return;
+  ctx.lineWidth = 3;
+  for (let i = 1; i < pts.length; i++) {
+    ctx.strokeStyle = i === 1 ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.35)';
+    ctx.setLineDash(i === 1 ? [] : [10, 8]);
+    ctx.beginPath();
+    ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
+    ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.font = 'bold 16px system-ui';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (let i = 1; i < pts.length; i++) {
+    ctx.fillStyle = i === 1 ? 'rgb(80,255,140)' : 'rgba(255,255,255,0.6)';
+    ctx.beginPath();
+    ctx.arc(pts[i].x, pts[i].y, 13, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#111';
+    ctx.fillText(String(i), pts[i].x, pts[i].y + 1);
   }
 }
 

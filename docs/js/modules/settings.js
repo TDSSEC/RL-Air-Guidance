@@ -83,6 +83,9 @@ let _settings = {
   inverseGravity: false,
   inputAssist: false,
 
+  // Coach level: 0 off, 1-4 guided path (see coach.js LEVELS)
+  coachLevel: 0,
+
   // Coach overlays (all off by default)
   coachGhost: false,
   coachShadow: false,
@@ -221,6 +224,10 @@ export function validateSetting(key, value) {
 
   if (key === 'gpPreset') {
     return typeof value === 'string' && ['ps5', 'xbox', 'generic'].includes(value);
+  }
+
+  if (key === 'coachLevel') {
+    return Number.isInteger(value) && value >= 0 && value <= 4;
   }
 
   if (key === 'ringDifficulty') {

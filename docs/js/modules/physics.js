@@ -927,9 +927,13 @@ export function updatePhysics(dt, settings, chromeShown) {
   w.z += az * adjustedDt;
 
   // Apply axis locks - set velocity to 0 for locked axes
-  if (pitchLocked) w.x = 0;
+  // Coach levels 1-2 lock pitch and roll so the stick works like a steering
+  // wheel: left/right always turns the nose anticlockwise/clockwise on screen.
+  const coachLevel = Settings.getSetting('coachLevel') || 0;
+  const coachLock = gameState.getRingModeActive() && (coachLevel === 1 || coachLevel === 2);
+  if (pitchLocked || coachLock) w.x = 0;
   if (yawLocked) w.y = 0;
-  if (rollLocked) w.z = 0;
+  if (rollLocked || coachLock) w.z = 0;
 
   // --- 7. Damping + release brake ---
   // CRITICAL: Damping behavior depends on mode!

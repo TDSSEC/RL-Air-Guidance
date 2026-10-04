@@ -489,6 +489,19 @@
                 Shows a compass indicator pointing to where you need to position your stick to aim at the next ring
               </div>
 
+              <div class="row sl">
+                <label for="coachLevelMenu"><b>Coach level</b></label>
+                <select id="coachLevelMenu">
+                  <option value="0">Off</option>
+                  <option value="1">1 - Steer (start here)</option>
+                  <option value="2">2 - Hover</option>
+                  <option value="3">3 - Full control</option>
+                  <option value="4">4 - Fade</option>
+                </select>
+              </div>
+              <div class="hint" id="coachLevelHint" style="margin-top: -0.5rem; font-size: 0.85rem; color: rgba(255,255,255,0.75);"></div>
+
+              <div class="hint" style="margin-top: 0.5rem; font-size: 0.8rem; color: rgba(255,255,255,0.5);">Advanced overlays (ignored while a coach level is on):</div>
               <div class="row">
                 <button id="coachGhostToggle" class="btn" type="button">Coach: Arrival Ghost</button>
                 <span class="tag" id="coachGhostStatus">Off</span>

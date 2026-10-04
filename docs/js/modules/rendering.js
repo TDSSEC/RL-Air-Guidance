@@ -242,7 +242,7 @@ export function drawRingModeHUD(state) {
   // The 3D version is properly attached to the grid and doesn't warp when the camera moves
 
   // Directional arrow compass for distant rings
-  if (ringModeStarted && !ringModePaused && ringModeLives > 0 && rings.length > 0) {
+  if (!state.coachLevel && ringModeStarted && !ringModePaused && ringModeLives > 0 && rings.length > 0) {
     // Find the target ring (oldest unpassed ring)
     const targetRing = rings.find(r => !r.passed && !r.missed);
 
@@ -761,6 +761,7 @@ export function renderHUD(state) {
       isMobile: state.isMobile,
       currentDifficulty: state.currentDifficulty,
       inputAssist: state.inputAssist,
+      coachLevel: state.coachLevel,
       camera: state.camera
     });
 
@@ -770,6 +771,7 @@ export function renderHUD(state) {
       const v = new THREE.Vector3();
       Coach.draw(hctx, {
         flags: state.coach,
+        level: state.coachLevel || 0,
         width: innerWidth,
         height: innerHeight,
         active: !state.ringModePaused && state.ringModeLives > 0,

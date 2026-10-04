@@ -246,8 +246,9 @@ function renderHUD(){
     isMobile: Input.getIsMobile(),
     currentDifficulty: RingMode.getCurrentDifficulty(),
     minimalUi: settings.minimalUi,
-    // Coach stick panel replaces the compass while it is on
-    inputAssist: settings.inputAssist && !settings.coachStick,
+    // Coach stick panel / coach levels replace the compass while on
+    inputAssist: settings.inputAssist && !settings.coachStick && !settings.coachLevel,
+    coachLevel: settings.coachLevel || 0,
     coach: {
       ghost: !!settings.coachGhost,
       shadow: !!settings.coachShadow,
@@ -705,6 +706,39 @@ export function init() {
       inputAssistBtn.classList.toggle('active', settings.inputAssist);
       inputAssistStatusTag.textContent = settings.inputAssist ? 'On' : 'Off';
       saveSettings();
+    });
+  }
+
+  // Coach level: one setting from zero to unassisted. Picking a level also
+  // picks the difficulty it is designed for.
+  const coachLevelSel = document.getElementById('coachLevelMenu');
+  const coachLevelHint = document.getElementById('coachLevelHint');
+  const COACH_LEVEL_INFO = {
+    0: { diff: null, hint: 'Coaching off - original game.' },
+    1: { diff: 'easy', hint: 'Steer: sideways only, no gravity. The stick only turns the nose: LEFT = anticlockwise, RIGHT = clockwise. Turn the white needle onto the green notch, press boost when the light is on.' },
+    2: { diff: 'normal', hint: 'Hover: gravity on. Same steering-wheel stick. Feather boost by following the light to stay up and drift to the ring.' },
+    3: { diff: 'normal', hint: 'Full control: pitch and roll unlocked. The text tells you which way to push the stick; keep the car flat to the camera to keep it simple.' },
+    4: { diff: 'normal', hint: 'Fade: guidance only appears when you are off course. Next step: Off.' }
+  };
+  if (coachLevelSel) {
+    const showLevel = () => {
+      const lvl = settings.coachLevel || 0;
+      coachLevelSel.value = String(lvl);
+      if (coachLevelHint) coachLevelHint.textContent = COACH_LEVEL_INFO[lvl].hint;
+    };
+    showLevel();
+    coachLevelSel.addEventListener('change', () => {
+      const lvl = parseInt(coachLevelSel.value, 10) || 0;
+      settings.coachLevel = lvl;
+      const d = COACH_LEVEL_INFO[lvl].diff;
+      if (d) {
+        RingMode.setCurrentDifficulty(d);
+        const diffSel = document.getElementById('ringDifficultyMenu');
+        if (diffSel) diffSel.value = d;
+      }
+      showLevel();
+      saveSettings();
+      if (RingMode.getRingModeActive()) RingMode.resetRingMode();
     });
   }
 
