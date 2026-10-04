@@ -708,11 +708,13 @@ export function init() {
     });
   }
 
-  // Coach overlay toggles (all off by default)
+  // Coach overlay + 3D depth cue toggles (all off by default)
   [['coachGhost', 'coachGhostToggle', 'coachGhostStatus'],
    ['coachShadow', 'coachShadowToggle', 'coachShadowStatus'],
    ['coachVelocity', 'coachVelocityToggle', 'coachVelocityStatus'],
-   ['coachStick', 'coachStickToggle', 'coachStickStatus']].forEach(([key, btnId, tagId]) => {
+   ['coachStick', 'coachStickToggle', 'coachStickStatus'],
+   ['arenaCorridor', 'arenaCorridorToggle', 'arenaCorridorStatus'],
+   ['arenaShadows', 'arenaShadowsToggle', 'arenaShadowsStatus']].forEach(([key, btnId, tagId]) => {
     const btn = document.getElementById(btnId);
     const tag = document.getElementById(tagId);
     if (!btn || !tag) return;

@@ -11,6 +11,7 @@ import * as Car from './car.js';
 import * as Audio from './audio.js';
 import { getSetting, saveSettings } from './settings.js';
 import * as Coach from './coach.js';
+import * as Arena from './arena.js';
 
 // ============================================================================
 // MODULE DEPENDENCIES (injected via init())
@@ -1916,6 +1917,7 @@ export function updateRingModeRendering(dt) {
       }
 
       lastRingModeActive = false;
+      Arena.hide();
       return;
     }
 
@@ -2268,6 +2270,15 @@ export function updateRingModeRendering(dt) {
 
   // Update the 3D dashed circle landing indicator on the grid
   updateLandingIndicator();
+
+  // 3D depth cues (corridor, ring shadows) - both off by default
+  Arena.update(scene, {
+    active: true,
+    corridor: !!getSetting('arenaCorridor'),
+    shadows: !!getSetting('arenaShadows'),
+    rings,
+    car: { x: ringModePosition.x, y: ringModePosition.y }
+  });
   } catch (error) {
     console.error('[RingMode] Error in updateRingModeRendering:', error);
     // Reset to safe state on rendering error
